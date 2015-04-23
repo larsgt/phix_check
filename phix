@@ -1,77 +1,112 @@
 #!/usr/bin/env perl
 
-# check for bwa
-my $bwa = undef;
+use strict;
+use warnings;
 
-# if we have a copy in this directry already
-if (-e "./bwa-0.7.12/bwa") {
-	$bwa = "./bwa-0.7.12/bwa";
-} else {
-	$bwa = `which bwa 2>&1`;
-	chomp($bwa);
-}
-
-# get BWA if we haven't found it
-if ($bwa =~ /^which: no/) {
-        $bwa = getBWA();
-} 
-
-# check for MEM
-my $mem = `$bwa 2>&1 | grep BWA-MEM`;
-chomp($mem);
-
-unless ($mem =~ m/BWA-MEM/) {
-        $bwa = getBWA();
-}
-
-# get PhiX
-system("wget -q -O NC_001422.$$.fna ftp://ftp.ncbi.nlm.nih.gov/genomes/Viruses/Enterobacteria_phage_phiX174_sensu_lato_uid14015/NC_001422.fna");
-
-unless(-e "NC_001422.$$.fna") {
-	warn "Unable to download PhiX174\n";
-	exit;
-}
-
-# try to build index
-system("$bwa index -a is NC_001422.$$.fna 2>/dev/null");
-unless (-e "NC_001422.$$.fna.pac") {
-	warn "Unable to create bwa index\n";
-	exit;
-}
-
-#check if fastq is zipped
-my $fastq = shift;
-my $cat = "cat";
-if ($fastq =~ m/\.gz/) {
-	$cat = "zcat";
-}
-
-# sample 10000 reads
-my $sample = 10000;
-my $limit  = $sample * 4;
-
-my $cmd = "$bwa mem -M NC_001422.$$.fna <($cat $fastq | head -n $limit) 2>/dev/null | awk '\\\$3 != \\\"*\\\"' | awk '\\\$2 <= 16' | grep -v \^\@ | wc -l";
-
-my $phixcount = `/bin/bash -c \"$cmd\"`;
-chomp($phixcount);
-
-print "PhiX: $phixcount reads out of $sample (", sprintf("%.2f", ($phixcount/$sample)*100), "\%)\n";
-
-# clean up
-system("rm NC_001422.$$.fna*");
+package PhiXTool;
 
 sub getBWA {
+		my $version = shift;
+		my $bwa = undef;
+		my $mem = undef;
+		my $bwa_str = "bwa-$version";
 
-        # attempt to download
-        system("wget -q http://downloads.sourceforge.net/sourceforge/bio-bwa/bwa-0.7.12.tar.bz2");
-
-        # unzip
-        system("bunzip2 < bwa-0.7.12.tar.bz2 | tar xvf - 2>/dev/null 1>/dev/null");
-
-        # install
-        chdir("bwa-0.7.12");
-        system("make 2>/dev/null 1>/dev/null");
-        chdir("..");
-
-	return("./bwa-0.7.12/bwa");
+		# if we have a copy in this directry already
+		if (-e "./$bwa_str/bwa") {
+			$bwa = "./$bwa_str/bwa";
+		} else {
+			$bwa = `which bwa 2>&1`;
+			chomp($bwa);
+			if ($bwa =~ /^which: no/) {
+				$bwa = undef;
+			}
+		}
+		# check for MEM
+		if($bwa) {
+			$mem = `$bwa 2>&1 | grep BWA-MEM`;
+			chomp($mem);
+		}
+		if(!$bwa || !$mem) {
+			$bwa = installBWA($bwa_str);
+		} 
+		return $bwa;
 }
+
+sub installBWA {
+	my $bwa_str = shift;
+	my $target = "./$bwa_str/bwa";
+	# attempt to download
+	system("wget -q http://downloads.sourceforge.net/sourceforge/bio-bwa/$bwa_str.tar.bz2");
+
+	# unzip
+	system("bunzip2 < $bwa_str.tar.bz2 | tar xvf - 2>/dev/null 1>/dev/null");
+
+	# install
+	chdir("$bwa_str");
+	system("make 2>/dev/null 1>/dev/null");
+	chdir("..");
+	
+	return($target) if(-e $target);
+}
+
+sub main {
+	my $fastq = shift;
+	my $sample = shift || 10000;
+	my $bwa_version = "0.7.12";
+
+	if(!-e $fastq) {
+		print "$fastq does not exist\n";
+		exit(-1);
+	}
+
+	# check for bwa
+	my $bwa = getBWA($bwa_version);
+	if(!$bwa) {
+		die("Unable to locate BWA!");
+	}
+
+	my $phix_base = "NC_001422.$$.fna";
+	# get PhiX
+	system("wget -q -O $phix_base ftp://ftp.ncbi.nlm.nih.gov/genomes/Viruses/Enterobacteria_phage_phiX174_sensu_lato_uid14015/NC_001422.fna");
+
+	unless(-e "$phix_base") {
+		die("Unable to download PhiX174");
+	}
+
+	# try to build index
+	system("$bwa index -a is $phix_base 2>/dev/null");
+	unless (-e "$phix_base.pac") {
+		die("Unable to create bwa index\n");
+		exit;
+	}
+
+	#check if fastq is zipped
+	my $cat = "cat";
+	if ($fastq =~ m/\.gz/) {
+		$cat = "zcat";
+	}
+
+	# sample 10000 reads
+	my $limit  = $sample * 4;
+
+	my $cmd = "$bwa mem -M NC_001422.$$.fna <($cat $fastq | head -n $limit) 2>/dev/null | awk '\\\$3 != \\\"*\\\"' | awk '\\\$2 <= 16' | grep -v \^\@ | wc -l";
+
+	my $phixcount = `/bin/bash -c \"$cmd\"`;
+	chomp($phixcount);
+
+	print "PhiX: $phixcount reads out of $sample (", sprintf("%.2f", ($phixcount/$sample)*100), "\%)\n";
+
+	# clean up
+	system("rm NC_001422.$$.fna*");
+
+}
+
+package main;
+
+if(!$ARGV[0]) {
+	print "Usage: phix <fastq> [sample size]\n";
+	exit;
+}
+PhiXTool::main($ARGV[0], $ARGV[1]);
+
+
